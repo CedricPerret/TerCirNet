@@ -80,10 +80,6 @@ function parse_commandline()
         "--mu_r"
             arg_type = Float64
             help = "Probability of random events"
-        "--b_g"
-            arg_type = Float64
-            help = "benefit of grouping compared to a fixed benefit of living alone of 1"
-            default = 1000.
         "--max_d"
             arg_type = Float64
             help = "maximum distance at which migration is possible"
@@ -154,9 +150,7 @@ end
     Calculate_cost_of_migrating(c_m,distance,max_d)
 Calculate the cost of migrating depending of distance -> cost function
 """
-function calculate_cost_of_migrating(c_m,distance,max_d)
-    #exp(-c_m * distance)
-    #For fixed cost of migration
+function calculate_proba_survival_migration(c_m,distance,max_d)
     if distance == 0
         return(1)
     elseif distance <= max_d
@@ -223,7 +217,7 @@ function model(parameters::Dict, i_simul::Int64)
         am_network = (distance_matrix .< max_d) - diagm(trues(n_patch)) 
 
     else
-        #Still need to print the xcoord and ycoord (does not matter) 
+        #The code still need to print the xcoord and ycoord (but it does not matter here) 
         x_coord = collect(1:n_patch)
         y_coord = collect(1:n_patch)
         #The distance is 1 if connected, 2 if not
@@ -235,16 +229,17 @@ function model(parameters::Dict, i_simul::Int64)
     # x_coord = repeat(1:Int(sqrt(100)),outer=Int(sqrt(100)))
     # y_coord = repeat(1:Int(sqrt(100)),inner=Int(sqrt(100)))
     # distance_matrix = reduce(hcat,[sqrt.((x_coord[i] .- x_coord).^2 .+ (y_coord[i] .- y_coord).^2) for i in 1:100])
-    # #print(sort(unique(distance_matrix)))
+    # print(sort(unique(distance_matrix)))
     # plot(sort(unique(distance_matrix)))
 
 
     clique_size_by_patch = vcat([fill(i,i) for i in clique_size]...)
 
 
-    #Staying is not migration
-    proba_surviving_migration_to = max.(calculate_cost_of_migrating.(c_m,distance_matrix,max_d),0.) - diagm(ones(n_patch))
-    #am_network = proba_surviving_migration_to.>0
+    #Calculate proba to survive migration
+    #We remove the diagonal because comparison with the payoff in their own patches is already implemented in the update function
+    #In other words, we here calculate the payoff they would get in neighbouring groups only
+    proba_surviving_migration_to = max.(calculate_proba_survival_migration.(c_m,distance_matrix,max_d),0.) - diagm(ones(n_patch))
 
 
 
@@ -261,7 +256,6 @@ function model(parameters::Dict, i_simul::Int64)
             K_patches = rand(Truncated(Normal(mean_K,sigma_K),0,Inf),n_patch)
             #K_patches = vcat(fill(100,40),fill(200,20),fill(100,40))
         end
-
     end
 
 
@@ -295,34 +289,20 @@ function model(parameters::Dict, i_simul::Int64)
     #Constant output by gen
     cst_output_gen = ["mean_degree" => mean(dropdims(sum(am_network,dims=2),dims=2))]
     #Create dataframe + saver function (see Utility.jl)
-    df_res, saver = init_data_output(only(de),["threat","error","z_threat_single","z_threat_group"],["z"],
+    df_res, saver = init_data_output(only(de),["error"],["z"],
     [], n_gen, n_print, j_print, i_simul, n_patch, 1,
     cst_output_gen = cst_output_gen,cst_output_patch = cst_output_patch)
 
-    #To measure if the threat is from migrating to group or not
-    threat = false
+
     error = false
-    #Here, individuals can not migrate to leave alone (b_g = 1000)
-    z_threat_single = 1.
-    z_threat_group = 1.
+
     for i_gen in 1:(n_gen)
         ##### UPDATE INEQUALITY =================================================================================================================
         #### UPDATE INEQUALITY WITH LEADER AVOIDING ANY MIGRATION ---------------------------------------------
         #Choose a random leader
         learner = rand(1:n_patch)
-
-        #z to avoid followers going to live alone
-        z_threat_single = (1 - (1-c_m)/b_g)
-
-        #z to avoid followers going to another group
-        z_threat_group = 1 - maximum(proba_surviving_migration_to[learner,:] .* (1 .- population))
-        #Can use adjacency matrix but the proba_surviving_migration_to allows to have different cost of migration if necessary
-        #z_threat_group = 1 - maximum((1 .- population[am_network[learner,:]]) .* (1-c_m))
-
-        #Check which threat leads to the lowest z. Here always z_threat_group because b_g is very high 1000
-        threat = (z_threat_group < z_threat_single)
-        population[learner] = minimum([z_threat_single,z_threat_group])
-        
+        #Update function
+        population[learner] = 1 - maximum(proba_surviving_migration_to[learner,:] .* (1 .- population))
         #Random variations
         if rand() < mu_r 
             error = true
@@ -330,10 +310,7 @@ function model(parameters::Dict, i_simul::Int64)
         else
             error = false
         end
-
-        saver(df_res,i_gen,[threat,error,z_threat_single,z_threat_group],[population],[])
-
-
+        saver(df_res,i_gen,[error],[population],[])
     end
 
 
